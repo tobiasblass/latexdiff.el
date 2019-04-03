@@ -134,13 +134,13 @@ If set to 'Emacs' (default), open the PDF within Emacs."
 (defun latexdiff--check-if-installed ()
   "Check if latexdiff is installed."
   (with-temp-buffer
-    (call-process "/bin/sh" nil t nil "-c"
+    (call-process "sh" nil t nil "-c"
                   "hash latexdiff 2>/dev/null || echo 'NOT INSTALLED'")
     (goto-char (point-min))
     (if (re-search-forward "NOT INSTALLED" (point-max) t)
         (error "'latexdiff' is not installed, please install it")))
   (with-temp-buffer
-    (call-process "/bin/sh" nil t nil "-c"
+    (call-process "sh" nil t nil "-c"
                   "hash latexdiff-vc 2>/dev/null || echo 'NOT INSTALLED'")
     (goto-char (point-min))
     (if (re-search-forward "NOT INSTALLED" (point-max) t)
@@ -157,7 +157,7 @@ If set to 'Emacs' (default), open the PDF within Emacs."
   "Display the pdf FILENAME according to `latexdiff-pdf-viewer'."
   (if (string= latexdiff-pdf-viewer "Emacs")
       (find-file filename)
-    (call-process "/bin/sh" nil 0 nil "-c"
+    (call-process "sh" nil 0 nil "-c"
                   (format "%s %s"
                           (shell-quote-argument latexdiff-pdf-viewer)
                           (shell-quote-argument filename)))))
@@ -179,7 +179,6 @@ display when the process ends"
       (message "[%s] Displaying TeX diff with %s" filename1 filename2)
       (find-file (format "%s.tex" diff-file))))
   (setq latexdiff-runningp nil))
-
 
 (defun latexdiff--compile-diff (file1 file2 &optional dir)
   "Use latexdiff to compile the diff between FILE1 and FILE2.
@@ -252,30 +251,40 @@ display when the process ends."
   (setq latexdiff-runningp nil))
 
 
+(defun latexdiff-vc--run (args dir file)
+  "Run latexdiff-vc on file, storing the results in dir. args is a list of arguments to pass in addition"
+  (let* ((diff-file (expand-file-name file dir))
+	 (kill-cr-cmd (format "tr -d '\\r' < %1$s.tex > %1$s.unix && mv %1$s.unix %1$s.tex"
+			      (shell-quote-argument diff-file))))
+    (latexdiff--check-if-installed)
+    (setq latexdiff-runningp t)
+    (let ((process (start-process "latexdiff" " *latexdiff*"
+                                  "sh" "-c"
+				  (format "yes X | ( latexdiff-vc --dir %s --force --git %s %s.tex && %s && pdflatex --output-directory %s %s.tex ) &> latexdiff.log;"
+					  (shell-quote-argument dir)
+                                          (mapconcat 'shell-quote-argument
+						     args
+						     " ")
+                                          (shell-quote-argument file)
+					  kill-cr-cmd
+					  (shell-quote-argument dir)
+					  (shell-quote-argument file))))
+	  (process-put process 'diff-dir dir)
+	  (process-put process 'file file)
+	  process))))
+
 (defun latexdiff-vc--compile-diff (REV1 REV2)
   "Use latexdiff to compile a pdf file of the difference between REV1 and REV2."
   (let* ((file (file-name-base))
          (diff-dir (format "%sdiff%s-%s" default-directory REV1 REV2))
          (process nil))
-    (latexdiff--check-if-installed)
-    (setq latexdiff-runningp t)
     (message "[%s] Generating latex diff between %s and %s" file REV1 REV2)
-    (setq process (start-process "latexdiff" " *latexdiff*"
-                                 "/bin/sh" "-c"
-                                 (format "yes X | latexdiff-vc --pdf --force --dir --git %s -r %s -r %s %s.tex &> latexdiff.log ;"
-                                         (mapconcat 'shell-quote-argument
-                                                    latexdiff-vc-args
-                                                    " ")
-                                         (shell-quote-argument REV1)
-                                         (shell-quote-argument REV2)
-                                         (shell-quote-argument file))))
-    (process-put process 'diff-dir diff-dir)
-    (process-put process 'file file)
+    (setq process (latexdiff-vc--run (append latexdiff-vc-args '("-r" REV1 "-r" REV2))
+				     diff-dir file))
     (process-put process 'rev1 REV1)
     (process-put process 'rev2 REV2)
     (set-process-sentinel process 'latexdiff-vc--latexdiff-sentinel)
     diff-dir))
-
 
 (defun latexdiff-vc--compile-diff-with-current (REV)
   "Use latexdiff to compile a pdf file of the difference between the current state and REV."
@@ -285,16 +294,8 @@ display when the process ends."
     (latexdiff--check-if-installed)
     (setq latexdiff-runningp t)
     (message "[%s] Generating latex diff with %s" file REV)
-    (setq process (start-process "latexdiff" " *latexdiff*"
-                                 "/bin/sh" "-c"
-                                 (format "yes X | latexdiff-vc --dir --pdf --force --git %s -r %s %s.tex &> latexdiff.log;"
-                                         (mapconcat 'shell-quote-argument
-                                                    latexdiff-vc-args
-                                                    " ")
-                                         (shell-quote-argument REV)
-                                         (shell-quote-argument file))))
-    (process-put process 'diff-dir diff-dir)
-    (process-put process 'file file)
+    (setq process (latexdiff-vc--run (append latexdiff-vc-args '("-r" REV1))
+				     diff-dir file))
     (process-put process 'rev1 "current")
     (process-put process 'rev2 REV)
     (set-process-sentinel process 'latexdiff-vc--latexdiff-sentinel)
